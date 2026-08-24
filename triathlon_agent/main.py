@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime, timezone
 import requests
 from fastapi import FastAPI, Request
 from telegram import Bot
@@ -10,7 +11,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 app = FastAPI()
 
-# Initialize Gemini Client
+# Initialize Gemini Client & Telegram Bot
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -23,23 +24,25 @@ def log_to_google_sheet(log_type, content, metrics):
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client_gs = gspread.authorize(creds)
         sheet = client_gs.open("Triathlon_Agent_Ledger").sheet1
-        sheet.append_row([str(os.popen('date').read().strip()), log_type, content, metrics])
+        
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        sheet.append_row([timestamp, log_type, content, metrics])
     except Exception as e:
         print(f"Sheet logging error: {e}")
 
 # --- PROFESSIONAL SPORTS SCIENCE SYSTEM INSTRUCTION ---
 SYSTEM_INSTRUCTION = """
-You are an elite, multi-disciplinary sports science entourage for a professional triathlete. Your team consists of:
+You are an elite, multi-disciplinary sports science entourage for a professional triathlete based in Mauritius. Your team consists of:
 1. Head Triathlon Coach (Periodization, brick management, tapering, volume/intensity distribution).
 2. Sports Physiotherapist & Biomechanist (Injury prevention, ACWR load safety, tendon/joint rehab).
 3. Sports Nutritionist (Multimodal plate analysis, macro calculation, glycogen replenishment).
 4. Exercise Physiologist (Heart rate zones, cardiac drift analysis, autonomic fatigue tracking).
 
 CORE OPERATING PROTOCOLS:
-1. HOLISTIC SYNTHESIS: Evaluate inputs against the athlete's training load and past history. Never analyze in isolation.
+1. HOLISTIC SYNTHESIS: Evaluate inputs against the athlete's training load and past history. Factor in their baseline physiological stress from instructing indoor spinning classes. Never analyze in isolation.
 2. INJURY GUARDRAIL: Track localized pain scores (1-10). If pain on any tendon/joint is >= 4/10 or recurring, immediately veto high-impact work and mandate a structural modification (e.g., pool/trainer swap).
-3. NUTRITIONIST MODE: When food photos are sent, estimate calories, protein, and carbs. Critique recovery gaps relative to training expenditure.
-4. TAPER & PERIODIZATION: During tapers, cut volume 40-60% while maintaining short race-pace intervals. Manage phantom fatigue and prohibit unscheduled overtraining.
+3. NUTRITIONIST MODE: When food photos are sent, estimate calories, protein, and carbs. Critique recovery gaps relative to training expenditure. Suggest utilizing Tailwind recovery mix or SIS energy bars if acute mid-session/post-session refueling is required.
+4. TAPER & CLIMATE PERIODIZATION: During tapers, cut volume 40-60% while maintaining short race-pace intervals. Account for the tropical heat and humidity in hydration/pacing strategies, especially on long Triban road bike rides or heavy runs.
 5. OUTPUT: Concise, structured, mobile-friendly. Always conclude with an exact directive of **WHAT TO EXECUTE TODAY**.
 """
 
@@ -79,10 +82,13 @@ async def telegram_webhook(request: Request):
     # Save row to Google Sheets
     log_to_google_sheet(log_type, text or caption or "Meal Photo", metrics_summary)
 
+    # Dynamic "Auto" Model Routing
+    target_model = "gemini-3.6-pro" if "photo" in message else "gemini-3.6-flash"
+
     # Generate Gemini Response
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=target_model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
@@ -98,4 +104,5 @@ async def telegram_webhook(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
